@@ -1,0 +1,21 @@
+name: Scala Exercise
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+
+  build:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v2
+    - name: Compile
+      run: make compile
+    - name: Test
+      run: make test
