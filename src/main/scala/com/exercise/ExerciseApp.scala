@@ -2,15 +2,17 @@ package com.exercise
 import scala.io.Source
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.functions._
-import org.apache.spark.sql.SparkSession
+import org.apache.spark.sql.{SaveMode, SparkSession}
+
 
 object ExerciseApp extends App {
-      val spark = SparkSession
+     @transient val spark = SparkSession
         .builder()
         .appName("calculate_outlier")
         .master("local[*]") // Change to your desired master URL for cluster deployment
         .getOrCreate()
 
+     @transient val  jdbcUrl = "jdbc:sqlite:./warehouse-test.db"
       args.length match {
             case 0 => {
                   println("Usage: operation [ingest|outliers] args")
@@ -27,28 +29,34 @@ object ExerciseApp extends App {
       }
 
       def performIngestion(args: Array[String]): Unit = {
+            //Reading data from files incrementally
+
+
             try {
                   val schema = StructType(List(StructField("Id", StringType, nullable = true)
                         , StructField("PostId", StringType, nullable = true)
                         , StructField("VoteTypeId", StringType, nullable = true)
                         , StructField("CreationDate", TimestampType, nullable = true)))
-                  val votesDF = spark.read.schema(schema).json(args(1))
+                  val votesDFTarget = spark.read.jdbc(jdbcUrl, "votes", new java.util.Properties())
+                  val votesDFSource = spark.read.schema(schema).json(args(1))
 
-                  //Cleanup table and directory
-                  spark.sql("DROP TABLE IF EXISTS votes")
-                  val directoryPath = "spark-warehouse/votes"
-                  val hadoopConf = spark.sparkContext.hadoopConfiguration
-                  val fs = org.apache.hadoop.fs.FileSystem.get(hadoopConf)
-                  val pathToDelete = new org.apache.hadoop.fs.Path(directoryPath)
-                  if (fs.exists(pathToDelete)) {
-                        fs.delete(pathToDelete, true)
-                        println(s"Directory $directoryPath deleted successfully.")
-                  } else {
-                        println(s"Directory $directoryPath does not exist.")
-                  }
+                  // Identifying new data using a left join between source and target table.
 
-                  //Writing Data to internal table on disk
-                  votesDF.write.mode("overwrite").format("parquet").saveAsTable("votes")
+                  val joinedDF = votesDFSource.join(votesDFTarget,votesDFSource.col("Id") === votesDFTarget.col("Id"),"left")
+                                              .select(votesDFSource.col("Id")
+                                                     ,votesDFSource.col("PostId")
+                                                     ,votesDFSource.col("VoteTypeId")
+                                                     ,votesDFSource.col("CreationDate")
+                                                     ,votesDFTarget.col("Id").as("tgtId"))
+                  val incrementalDF = joinedDF.filter("tgtId is null").drop("tgtId")
+
+                  // Write DataFrame to SQLite table
+                  val tableName = "votes"
+                  val mode = SaveMode.Append // Choose the appropriate save mode
+                  incrementalDF.write
+                    .mode(mode)
+                    .jdbc(jdbcUrl, tableName, new java.util.Properties())
+
             }
             catch {
                   case e: org.apache.spark.sql.AnalysisException =>
@@ -63,14 +71,21 @@ object ExerciseApp extends App {
 
       def executeOutliersQuery(): Unit = {
             try {
-                  val votesDF = spark.read.parquet("spark-warehouse/votes/")
+                  // Read data from the SQLite table into a DataFrame
+                  print("Reading data from SQL-Lite database")
+                  val votesDF = spark.read.jdbc(jdbcUrl, "votes", new java.util.Properties()).dropDuplicates()
                   val votesByYearAndWeekDF = votesDF.groupBy(year(col("CreationDate")).as("year"),
                         weekofyear(col("CreationDate")).as("weekNumber")).agg(count("*").as("totalVotesByYearWeek"))
                   val totalAvgVotes = votesByYearAndWeekDF.agg(avg("totalVotesByYearWeek").as("totalAvgVotes")).first().getAs[Double]("totalAvgVotes")
                   val deviationDF = votesByYearAndWeekDF.withColumn("deviation", abs(lit(1) - (col("totalVotesByYearWeek") / totalAvgVotes)))
                   val outlier = deviationDF.filter("deviation > 0.2").select(col("year"), col("weekNumber"), col("totalVotesByYearWeek").as("VoteCount")).orderBy("Year", "weekNumber")
-                  outlier.createOrReplaceTempView("outlier_weeks")
-                  spark.sql("select * from outlier_weeks").show()
+
+                  //Writing the final table to SQLLite database
+                  outlier.write
+                    .mode("overwrite")
+                    .jdbc(jdbcUrl, "outlier_weeks", new java.util.Properties())
+                  val outlierWeeksDF = spark.read.jdbc(jdbcUrl, "outlier_weeks", new java.util.Properties())
+                  outlierWeeksDF.show()
             }
             catch
             {

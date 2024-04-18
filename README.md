@@ -179,8 +179,8 @@ Please include instructions about your strategy and important decisions you made
 >>           Suppose we have cluster of 100 nodes - each node has 32 cpu core and 128 GB ram
 >>           Lets take a balanced approach of 5 core per executor and 23 GB RAM.
 >>           So one executor can parallel work on 5 partitions/tasks each of 128 mb.
->>           Total core = num executor * executor cores * nodes = 6 * 5 * 100 = 300 cores
->>           So we can run 300 tasks in parallel. It will first fetch 300 partition data then run next 300 partition data and so on.
+>>           Total core = num executor * executor cores * nodes = 6 * 5 * 100 = 3000 cores
+>>           So we can run 3000 tasks in parallel. It will first fetch 300 partition data then run next 300 partition data and so on.
 
 Some other aspect for improving the performance
 * Partition the data across multiple nodes in the cluster to enable parallel processing.
